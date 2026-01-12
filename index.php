@@ -13,8 +13,8 @@ $TO_COUNCIL_EMAIL = getenv('TO_COUNCIL_EMAIL');
 $CC_EMAILS = getenv('CC_EMAILS');
 
 // set to your city
-$MAP_CENTER_LAT = getenv('MAP_CENTER_LAT') ?: 11.0168;
-$MAP_CENTER_LNG = getenv('MAP_CENTER_LNG') ?: 76.9558;
+$MAP_CENTER_LAT = getenv('MAP_CENTER_LAT');
+$MAP_CENTER_LNG = getenv('MAP_CENTER_LNG');
 
 
 
