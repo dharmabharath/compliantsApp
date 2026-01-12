@@ -144,7 +144,7 @@ Always sign the letter with:
             ]
         ],
         'generationConfig' => [
-            'maxOutputTokens' => 1200,
+            'maxOutputTokens' => 3000,
             'temperature' => 0.7,
             'topP' => 0.95,
             'topK' => 40
