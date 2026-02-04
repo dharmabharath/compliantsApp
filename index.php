@@ -1,4 +1,18 @@
 <?php
+session_start();
+
+// Generate CSRF token if not exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Function to verify CSRF token
+function verifyCsrfToken($token)
+{
+    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+}
+
+// Load .env file
 
 // Microsoft Graph API credentials
 $gemini_api_key = getenv('GEMINI_API_KEY');
@@ -13,8 +27,8 @@ $TO_COUNCIL_EMAIL = getenv('TO_COUNCIL_EMAIL');
 $CC_EMAILS = getenv('CC_EMAILS');
 
 // set to your city
-$MAP_CENTER_LAT = getenv('MAP_CENTER_LAT');
-$MAP_CENTER_LNG = getenv('MAP_CENTER_LNG');
+$MAP_CENTER_LAT = getenv('MAP_CENTER_LAT') ?: 11.0168;
+$MAP_CENTER_LNG = getenv('MAP_CENTER_LNG') ?: 76.9558;
 
 
 
@@ -76,6 +90,12 @@ function getMicrosoftAccessToken($config)
 // Handle AJAX request for Gemini expansion
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'expand') {
     header('Content-Type: application/json');
+
+    // Verify CSRF token
+    if (!verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+        echo json_encode(['success' => false, 'error' => 'Invalid security token. Please refresh the page.']);
+        exit;
+    }
 
     $complaint = trim($_POST['complaint'] ?? '');
     $hasAttachments = isset($_POST['hasAttachments']) && $_POST['hasAttachments'] === 'true';
@@ -144,28 +164,10 @@ Always sign the letter with:
             ]
         ],
         'generationConfig' => [
-            'maxOutputTokens' => 3000,
+            'maxOutputTokens' => 10000,
             'temperature' => 0.7,
             'topP' => 0.95,
             'topK' => 40
-        ],
-        'safetySettings' => [
-            [
-                'category' => 'HARM_CATEGORY_HARASSMENT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_HATE_SPEECH',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ]
         ]
     ];
 
@@ -206,6 +208,12 @@ Always sign the letter with:
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'send') {
     header('Content-Type: application/json');
 
+    // Verify CSRF token
+    if (!verifyCsrfToken($_POST['csrf_token'] ?? '')) {
+        echo json_encode(['success' => false, 'message' => 'Invalid security token. Please refresh the page.']);
+        exit;
+    }
+
     $complaint = trim($_POST['complaint'] ?? '');
     $lat = trim($_POST['lat'] ?? '');
     $lng = trim($_POST['lng'] ?? '');
@@ -225,7 +233,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     // Build email body
     $emailBody = $complaint;
-    $emailBody .= "\n\nSent from Coimbatore Complaints System";
 
     // Prepare attachments (resize images to ~1MB max)
     $attachments = [];
@@ -626,7 +633,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 </head>
 
 <body>
-    <h1>🇮🇳 Report to Coimbatore Municipal Corporation</h1>
+    <h1>Coimbatore Municipal Corporation</h1>
 
     <?php if ($message): ?>
         <div class="message <?= $messageType ?>"><?= htmlspecialchars($message) ?></div>
@@ -634,11 +641,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     <form method="POST" enctype="multipart/form-data" id="complaintForm">
         <input type="hidden" name="action" value="send">
+        <input type="hidden" name="csrf_token" id="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
         <input type="hidden" id="selectedLat" name="lat" value="">
         <input type="hidden" id="selectedLng" name="lng" value="">
+        <input type="hidden" id="selectedWard" name="ward" value="">
 
-        <button type="button" onclick="useMyLocation()" style="margin-bottom: 10px;">Center on my location</button>
-        <label>Then click on map to place marker</label>
+        <button type="button" onclick="useMyLocation()" style="margin-bottom: 10px;">📌 Use my current location</button>
+        <label>Or click on map to select a different location</label>
         <div id="map"></div>
         <div class="location-info" id="locationInfo">No location selected</div>
 
@@ -651,14 +660,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <p>Click to upload photos or drag & drop</p>
             </div>
             <div id="imagePreview" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;"></div>
-            <input type="file" id="attachments" name="attachments[]" multiple accept="image/*" onchange="previewImages(this)">
+            <input type="file" id="attachments" name="attachments[]" multiple accept="image/*">
         </div>
 
         <label for="input">Your complaint (in English or Tamil)</label>
         <textarea id="input" required placeholder="Write your complaint here in English or Tamil..." oninput="localStorage.setItem('complaint', this.value)" style="min-height: 100px;"></textarea>
 
         <button type="button" id="expandBtn" onclick="expandToFormalLetter()">
-            Generate Tamil Letter
+            ✨ Generate Formal Letter
         </button>
 
         <label for="complaint" style="margin-top: 15px;">Tamil formal letter (this will be sent)</label>
@@ -668,7 +677,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <textarea id="expanded" readonly placeholder="English translation will appear here..." style="min-height: 400px;"><?= htmlspecialchars($expanded ?? '') ?></textarea>
 
         <div class="buttons">
-            <button type="button" onclick="sendComplaint()">Send to Coimbatore Corporation</button>
+            <button type="button" id="sendBtn" onclick="sendComplaint()">Send to Coimbatore Corporation</button>
         </div>
 
         <div id="statusMessage" style="margin-top: 15px;"></div>
@@ -693,22 +702,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             'Satellite': satellite
         }).addTo(map);
 
-        function useMyLocation() {
+        async function useMyLocation() {
             if (!navigator.geolocation) {
                 alert('Geolocation not supported');
                 return;
             }
 
+            document.getElementById('locationInfo').textContent = 'Getting your location...';
+
             navigator.geolocation.getCurrentPosition(
-                (pos) => {
-                    map.setView([pos.coords.latitude, pos.coords.longitude], 16);
-                },
-                (err) => {
-                    alert('Could not get location. Please allow location access.');
-                }, {
-                    enableHighAccuracy: true
-                }
+                async (pos) => {
+                        const lat = pos.coords.latitude;
+                        const lng = pos.coords.longitude;
+
+                        // Center map and zoom in
+                        map.setView([lat, lng], 17);
+
+                        // Place or move marker
+                        if (marker) {
+                            marker.setLatLng([lat, lng]);
+                        } else {
+                            marker = L.marker([lat, lng]).addTo(map);
+                        }
+
+                        // Store coordinates
+                        document.getElementById('selectedLat').value = lat;
+                        document.getElementById('selectedLng').value = lng;
+
+                        // Fetch address and ward info
+                        await fetchLocationDetails(lat, lng);
+                    },
+                    (err) => {
+                        alert('Could not get location. Please allow location access.');
+                        document.getElementById('locationInfo').textContent = 'No location selected';
+                    }, {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 0
+                    }
             );
+        }
+
+        // Shared function to fetch address and ward details
+        async function fetchLocationDetails(lat, lng) {
+            document.getElementById('locationInfo').textContent = 'Getting address...';
+
+            try {
+                // Fetch address from Nominatim
+                const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, {
+                    headers: {
+                        'User-Agent': 'CoimbatoreComplaints/1.0'
+                    }
+                });
+                const data = await resp.json();
+                console.log("data123", data);
+
+                let cleanAddress = data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+                cleanAddress = cleanAddress.replace(/,?\s*Ward\s*\d+\s*,?/gi, ', ').replace(/,\s*,/g, ',').replace(/^,\s*|,\s*$/g, '');
+
+                // Fetch ward info from CCMC GeoJSON API
+                const wardInfo = await getWardFromCCMC(lat, lng);
+                if (wardInfo && wardInfo.wardNo) {
+                    selectedAddress = 'Ward ' + wardInfo.wardNo + ', ' + cleanAddress;
+                    document.getElementById('locationInfo').textContent = '📌 Ward ' + wardInfo.wardNo + ' - ' + wardInfo.areaName + '\n' + cleanAddress;
+                    document.getElementById('selectedWard').value = wardInfo.wardNo;
+                    window.selectedWardInfo = wardInfo;
+                } else {
+                    selectedAddress = cleanAddress;
+                    document.getElementById('locationInfo').textContent = '📌 ' + cleanAddress;
+                    document.getElementById('selectedWard').value = '';
+                    window.selectedWardInfo = null;
+                }
+            } catch (err) {
+                selectedAddress = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+                document.getElementById('locationInfo').textContent = '📌 ' + selectedAddress;
+                document.getElementById('selectedWard').value = '';
+                window.selectedWardInfo = null;
+            }
         }
 
         let marker = null;
@@ -727,27 +797,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 marker = L.marker(e.latlng).addTo(map);
             }
 
-            document.getElementById('locationInfo').textContent = 'Getting address...';
-
-            try {
-                const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, {
-                    headers: {
-                        'User-Agent': 'CoimbatoreComplaints/1.0'
-                    }
-                });
-                const data = await resp.json();
-                selectedAddress = data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-                document.getElementById('locationInfo').textContent = '📍 ' + selectedAddress;
-            } catch (err) {
-                selectedAddress = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-                document.getElementById('locationInfo').textContent = '📍 ' + selectedAddress;
-            }
+            // Fetch address and ward info using shared function
+            await fetchLocationDetails(lat, lng);
         });
+
+        // Point-in-polygon algorithm (ray casting)
+        function isPointInPolygon(point, polygon) {
+            const x = point[0],
+                y = point[1];
+            let inside = false;
+
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const xi = polygon[i][0],
+                    yi = polygon[i][1];
+                const xj = polygon[j][0],
+                    yj = polygon[j][1];
+
+                if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                    inside = !inside;
+                }
+            }
+
+            return inside;
+        }
+
+        // Cache for CCMC GeoJSON data
+        let ccmcWardData = null;
+
+        // Fetch ward info from CCMC GeoJSON API
+        async function getWardFromCCMC(lat, lng) {
+            try {
+                // Fetch GeoJSON data if not cached
+                if (!ccmcWardData) {
+                    const response = await fetch('https://ccmc.gov.in/images/Ward_Boundary_Feb_2022.geojson');
+                    ccmcWardData = await response.json();
+                }
+
+                // Point coordinates [longitude, latitude] - GeoJSON uses lng, lat order
+                const point = [lng, lat];
+
+                // Search through all features to find matching ward
+                for (const feature of ccmcWardData.features) {
+                    const geometry = feature.geometry;
+                    const properties = feature.properties;
+
+                    if (geometry.type === 'Polygon') {
+                        // Single polygon - coordinates[0] is the outer ring
+                        const coordinates = geometry.coordinates[0].map(coord => [coord[0], coord[1]]);
+                        if (isPointInPolygon(point, coordinates)) {
+                            return parseWardProperties(properties);
+                        }
+                    } else if (geometry.type === 'MultiPolygon') {
+                        // Multiple polygons
+                        for (const polygon of geometry.coordinates) {
+                            const coordinates = polygon[0].map(coord => [coord[0], coord[1]]);
+                            if (isPointInPolygon(point, coordinates)) {
+                                return parseWardProperties(properties);
+                            }
+                        }
+                    }
+                }
+
+                return null;
+            } catch (err) {
+                console.error('Error fetching CCMC ward data:', err);
+                return null;
+            }
+        }
+
+        // Parse ward properties from GeoJSON description
+        function parseWardProperties(properties) {
+            const description = properties.description || '';
+            const name = properties.name || '';
+
+            // Extract ward number from description (e.g., "New_Ward_No 1")
+            const wardMatch = description.match(/New_Ward_No\s*(\d+)/i);
+            const wardNo = wardMatch ? wardMatch[1] : null;
+
+            // Extract area name
+            const areaMatch = description.match(/Area_Name\s*([^<]+)/i);
+            const areaName = areaMatch ? areaMatch[1].trim() : name;
+
+            // Extract zone
+            const zoneMatch = description.match(/^([A-Z]+\s*ZONE)/i);
+            const zone = zoneMatch ? zoneMatch[1] : '';
+
+            return {
+                wardNo: wardNo,
+                areaName: areaName,
+                zone: zone,
+                fullName: name
+            };
+        }
 
         document.getElementById('input').value = localStorage.getItem('complaint') || '';
 
         const uploadBox = document.getElementById('uploadBox');
         const fileInput = document.getElementById('attachments');
+
+        // Store selected files in an array (FileList is read-only, can't delete from it)
+        let selectedFiles = [];
 
         uploadBox.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -763,25 +912,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             e.preventDefault();
             uploadBox.classList.remove('dragover');
             if (e.dataTransfer.files.length > 0) {
-                fileInput.files = e.dataTransfer.files;
-                previewImages(fileInput);
+                addFiles(e.dataTransfer.files);
             }
         });
 
-        function previewImages(input) {
+        // Handle file input change
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                addFiles(e.target.files);
+                e.target.value = ''; // Reset so same file can be added again
+            }
+        });
+
+        function addFiles(files) {
+            Array.from(files).forEach(file => {
+                if (file.type.startsWith('image/')) {
+                    selectedFiles.push(file);
+                }
+            });
+            renderImagePreviews();
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            renderImagePreviews();
+        }
+
+        function renderImagePreviews() {
             const preview = document.getElementById('imagePreview');
             const placeholder = document.getElementById('uploadPlaceholder');
-            preview.innerHTML = '';
+            preview.textContent = '';
 
-            if (input.files && input.files.length > 0) {
+            if (selectedFiles.length > 0) {
                 placeholder.style.display = 'none';
-                Array.from(input.files).forEach(file => {
+                selectedFiles.forEach((file, index) => {
                     const reader = new FileReader();
                     reader.onload = (e) => {
+                        const container = document.createElement('div');
+                        container.style.cssText = 'position: relative; display: inline-block; margin: 4px;';
+
                         const img = document.createElement('img');
                         img.src = e.target.result;
-                        img.style.cssText = 'width: 100%; border-radius: 4px; border: 1px solid #ddd;';
-                        preview.appendChild(img);
+                        img.style.cssText = 'width: 80px; height: 80px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; display: block;';
+
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.type = 'button';
+                        deleteBtn.textContent = '\u00D7';
+                        deleteBtn.style.cssText = 'position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(0,0,0,0.6); color: white; font-size: 12px; font-weight: bold; cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; transition: background 0.2s;';
+                        deleteBtn.title = 'Remove image';
+                        deleteBtn.onmouseenter = () => deleteBtn.style.background = 'rgba(220,53,69,0.9)';
+                        deleteBtn.onmouseleave = () => deleteBtn.style.background = 'rgba(0,0,0,0.6)';
+                        deleteBtn.onclick = (evt) => {
+                            evt.stopPropagation();
+                            removeFile(index);
+                        };
+
+                        container.appendChild(img);
+                        container.appendChild(deleteBtn);
+                        preview.appendChild(container);
                     };
                     reader.readAsDataURL(file);
                 });
@@ -790,10 +978,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
+        function getSelectedFiles() {
+            return selectedFiles;
+        }
+
+        // Helper function to set button loading state safely (no innerHTML)
+        function setButtonLoading(btn, isLoading, loadingText, normalText) {
+            btn.disabled = isLoading;
+            btn.textContent = isLoading ? loadingText : normalText;
+
+            // Remove existing spinner if any
+            const existingSpinner = btn.querySelector('.loading');
+            if (existingSpinner) existingSpinner.remove();
+
+            // Add spinner when loading
+            if (isLoading) {
+                const spinner = document.createElement('span');
+                spinner.className = 'loading';
+                btn.appendChild(spinner);
+            }
+        }
+
         async function expandToFormalLetter() {
             const input = document.getElementById('input').value;
-            const attachments = document.getElementById('attachments');
-            const hasAttachments = attachments.files && attachments.files.length > 0;
+            const hasAttachments = selectedFiles.length > 0;
             const btn = document.getElementById('expandBtn');
             const lat = document.getElementById('selectedLat').value;
             const lng = document.getElementById('selectedLng').value;
@@ -808,12 +1016,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 return;
             }
 
-            btn.disabled = true;
-            btn.innerHTML = 'Generating with Gemini AI...<span class="loading"></span>';
+            setButtonLoading(btn, true, 'Generating with AI...', 'Generate Tamil Letter');
 
             try {
                 const formData = new FormData();
                 formData.append('action', 'expand');
+                formData.append('csrf_token', document.getElementById('csrf_token').value);
                 formData.append('complaint', input);
                 formData.append('hasAttachments', hasAttachments);
                 formData.append('address', selectedAddress);
@@ -838,16 +1046,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 alert('Connection error. Please try again.');
                 console.error(error);
             } finally {
-                btn.disabled = false;
-                btn.innerHTML = 'Generate Tamil Letter';
+                setButtonLoading(btn, false, 'Generating with AI...', 'Generate Tamil Letter');
             }
         }
 
         async function sendComplaint() {
             const complaint = document.getElementById('complaint').value;
             const statusDiv = document.getElementById('statusMessage');
-            const attachments = document.getElementById('attachments');
-            const hasAttachments = attachments.files && attachments.files.length > 0;
+            const hasAttachments = selectedFiles.length > 0;
+            const sendBtn = document.getElementById('sendBtn');
 
             if (!complaint.trim()) {
                 alert('Please generate a formal Tamil letter first.');
@@ -867,7 +1074,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             const formData = new FormData(document.getElementById('complaintForm'));
             formData.set('action', 'send');
 
-            statusDiv.innerHTML = '<span style="color: #666;">Sending to Coimbatore Corporation...</span>';
+            // Add selected files from our managed array
+            formData.delete('attachments[]');
+            selectedFiles.forEach(file => {
+                formData.append('attachments[]', file);
+            });
+
+            // Disable button during sending
+            setButtonLoading(sendBtn, true, 'Sending...', 'Send to Coimbatore Corporation');
+            statusDiv.textContent = 'Sending to Coimbatore Corporation...';
+            statusDiv.style.color = '#666';
 
             try {
                 const response = await fetch(window.location.pathname + window.location.search, {
@@ -878,17 +1094,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 const data = await response.json();
 
                 if (data.success) {
-                    statusDiv.innerHTML = '<span style="color: green;">' + data.message + '</span>';
+                    statusDiv.textContent = data.message;
+                    statusDiv.style.color = 'green';
                     document.getElementById('input').value = '';
                     document.getElementById('complaint').value = '';
                     document.getElementById('expanded').value = '';
                     localStorage.removeItem('complaint');
+                    // Clear uploaded images
+                    selectedFiles = [];
+                    renderImagePreviews();
                 } else {
-                    statusDiv.innerHTML = '<span style="color: red;">' + data.message + '</span>';
+                    statusDiv.textContent = data.message;
+                    statusDiv.style.color = 'red';
                 }
             } catch (error) {
-                statusDiv.innerHTML = '<span style="color: red;">Connection error. Please try again.</span>';
+                statusDiv.textContent = 'Connection error. Please try again.';
+                statusDiv.style.color = 'red';
                 console.error(error);
+            } finally {
+                // Re-enable button after sending
+                setButtonLoading(sendBtn, false, 'Sending...', 'Send to Coimbatore Corporation');
             }
         }
     </script>
